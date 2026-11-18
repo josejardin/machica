@@ -6,15 +6,15 @@ partial class MainForm
 {
     private System.ComponentModel.IContainer? components = null;
     private Panel sidebar = null!, topbar = null!, contentPanel = null!;
-    private Label lblLogo = null!, lblPageTitle = null!, lblUser = null!;
+    private Label lblLogo = null!, lblPageTitle = null!, lblUser = null!, lblDbStatus = null!;
     private Button btnDashboard = null!, btnMembers = null!, btnPayments = null!, btnReports = null!, btnExpenses = null!, btnRefresh = null!, btnLogout = null!, btnAccountSettings = null!, btnDailyGym = null!, btnQRCode = null!;
-    private Button btnActiveMemberships = null!, btnExpiredMemberships = null!, btnRenewalHistory = null!, btnPaymentHistory = null!, btnUnpaidBalances = null!, btnIncomeReports = null!, btnStaffUsers = null!, btnDeletedRecords = null!;
+    private Button btnActiveMemberships = null!, btnExpiredMemberships = null!, btnRenewalHistory = null!, btnUnpaidBalances = null!, btnIncomeReports = null!, btnStaffUsers = null!, btnDeletedRecords = null!;
     private ComboBox cmbMembersView = null!;
     private Panel pageDashboard = null!, pageMembers = null!, pagePayments = null!, pageReports = null!;
     private Panel pageActiveMemberships = null!, pageExpiredMemberships = null!, pageRenewalHistory = null!, pagePaymentHistory = null!, pageUnpaidBalances = null!, pageIncomeReports = null!, pageStaffUsers = null!, pageDeletedRecords = null!;
     private Label lblWelcome = null!, lblMemberCount = null!, lblActiveCount = null!, lblRevenue = null!, lblPaymentCount = null!;
     private DataGridView gridRecent = null!, gridMembers = null!, gridPayments = null!, gridActiveMemberships = null!, gridExpiredMemberships = null!, gridRenewalHistory = null!, gridPaymentHistory = null!, gridUnpaidBalances = null!;
-    private Button btnAddMember = null!, btnEditMember = null!, btnDeleteMember = null!, btnExportMembers = null!, btnExportPayments = null!, btnAddActiveMember = null!;
+    private Button btnAddMember = null!, btnEditMember = null!, btnDeleteMember = null!, btnMemberPass = null!, btnExportMembers = null!, btnExportPayments = null!, btnAddActiveMember = null!, btnSyncCloud = null!;
     private TextBox txtMemberSearch = null!, txtPaymentSearch = null!;
     private DateTimePicker dtpPaymentDate = null!;
     private Label lblMemberSearch = null!, lblPaymentSearch = null!, lblReportMembers = null!, lblReportRevenue = null!, lblReportActive = null!;
@@ -61,6 +61,16 @@ partial class MainForm
         btnAddActiveMember = new Button();
         btnAddMember = ActionButton("+  Register Member");
         btnEditMember = ActionButton("✎  Edit");
+        btnMemberPass = new Button
+        {
+            Text = "▣ Member Pass",
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(41, 128, 185),
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            FlatAppearance = { BorderSize = 0 },
+            Cursor = Cursors.Hand
+        };
         btnDeleteMember = new Button
         {
             Text = "🗑 Delete",
@@ -129,8 +139,33 @@ partial class MainForm
         sidebar.Controls.Add(bottomPanel); sidebar.Controls.Add(navigationPanel); sidebar.Controls.Add(headerPanel);
         topbar.Dock = DockStyle.Top; topbar.Height = 76; topbar.BackColor = Color.White; topbar.Padding = new Padding(28, 0, 25, 0);
         lblPageTitle.Text = "Dashboard"; lblPageTitle.Font = new Font("Segoe UI", 19, FontStyle.Bold); lblPageTitle.ForeColor = Color.FromArgb(29, 36, 52); lblPageTitle.Location = new Point(28, 18); lblPageTitle.Size = new Size(400, 42);
+        lblDbStatus = new Label
+        {
+            Text = "🟢 MySQL Online",
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+            ForeColor = Color.FromArgb(39, 174, 96),
+            BackColor = Color.FromArgb(235, 247, 238),
+            Padding = new Padding(10, 6, 10, 6),
+            AutoSize = true,
+            Location = new Point(720, 23),
+            Anchor = AnchorStyles.Top | AnchorStyles.Right
+        };
+        btnSyncCloud = new Button
+        {
+            Text = "☁️ Sync Cloud",
+            Size = new Size(130, 36),
+            Location = new Point(885, 20),
+            Anchor = AnchorStyles.Top | AnchorStyles.Right,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(41, 128, 185),
+            ForeColor = Color.White,
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            Cursor = Cursors.Hand
+        };
+        btnSyncCloud.FlatAppearance.BorderSize = 0;
+        btnSyncCloud.Click += async (_, _) => await TriggerCloudSyncAsync();
         btnRefresh.Text = "↻ Refresh"; btnRefresh.Size = new Size(105, 36); btnRefresh.Location = new Point(1030, 20); btnRefresh.Anchor = AnchorStyles.Top | AnchorStyles.Right; btnRefresh.FlatStyle = FlatStyle.Flat; btnRefresh.FlatAppearance.BorderColor = Color.Gainsboro; btnRefresh.BackColor = Color.White; btnRefresh.Click += btnRefresh_Click;
-        topbar.Controls.AddRange(new Control[] { lblPageTitle, btnRefresh });
+        topbar.Controls.AddRange(new Control[] { lblPageTitle, lblDbStatus, btnSyncCloud, btnRefresh });
         contentPanel.Dock = DockStyle.Fill; contentPanel.BackColor = Color.FromArgb(246, 247, 250); contentPanel.Padding = new Padding(25);
         pageDashboard.Dock = DockStyle.Fill; pageDashboard.BackColor = contentPanel.BackColor;
         // create additional pages (placeholders)
@@ -199,12 +234,13 @@ partial class MainForm
         pageDashboard.Controls.AddRange(new Control[] { lblWelcome, lblMemberCount, lblActiveCount, lblRevenue, lblPaymentCount, recentTitle, gridRecent });
         pageMembers.Dock = DockStyle.Fill; pageMembers.BackColor = contentPanel.BackColor;
         lblMemberSearch.Text = "Search members"; lblMemberSearch.Location = new Point(25, 8); lblMemberSearch.Size = new Size(120, 24); lblMemberSearch.ForeColor = Color.Gray;
-        txtMemberSearch.Location = new Point(25, 34); txtMemberSearch.Size = new Size(290, 32); txtMemberSearch.Font = new Font("Segoe UI", 10); txtMemberSearch.TextChanged += txtMemberSearch_TextChanged;
-        cmbMembersView.Location = new Point(350, 33); cmbMembersView.Size = new Size(220, 32); cmbMembersView.Items.AddRange(new object[] { "All Members", "Active Members", "Expired Members", "Renewal History" });
+        txtMemberSearch.Location = new Point(25, 34); txtMemberSearch.Size = new Size(260, 32); txtMemberSearch.Font = new Font("Segoe UI", 10); txtMemberSearch.TextChanged += txtMemberSearch_TextChanged;
+        cmbMembersView.Location = new Point(295, 33); cmbMembersView.Size = new Size(185, 32); cmbMembersView.Items.AddRange(new object[] { "All Members", "Active Members", "Expired Members", "Renewal History" });
         cmbMembersView.SelectedIndex = 0; cmbMembersView.SelectedIndexChanged += cmbMembersView_SelectedIndexChanged;
-        btnAddMember.Location = new Point(625, 27); btnAddMember.Size = new Size(160, 38); btnAddMember.Click += btnAddMember_Click;
-        btnEditMember.Location = new Point(795, 27); btnEditMember.Size = new Size(115, 38); btnEditMember.Click += btnEditMember_Click;
-        btnDeleteMember.Location = new Point(920, 27); btnDeleteMember.Size = new Size(105, 38); btnDeleteMember.BackColor = Color.FromArgb(190, 54, 54); btnDeleteMember.Click += btnDeleteMember_Click;
+        btnAddMember.Location = new Point(490, 27); btnAddMember.Size = new Size(140, 38); btnAddMember.Click += btnAddMember_Click;
+        btnEditMember.Location = new Point(638, 27); btnEditMember.Size = new Size(95, 38); btnEditMember.Click += btnEditMember_Click;
+        btnMemberPass.Location = new Point(741, 27); btnMemberPass.Size = new Size(145, 38); btnMemberPass.Click += btnMemberPass_Click;
+        btnDeleteMember.Location = new Point(894, 27); btnDeleteMember.Size = new Size(95, 38); btnDeleteMember.BackColor = Color.FromArgb(190, 54, 54); btnDeleteMember.Click += btnDeleteMember_Click;
         btnExportMembers.Location = new Point(25, 78); btnExportMembers.Size = new Size(105, 32); btnExportMembers.Click += btnExportMembers_Click;
         // configure members grid columns and layout
         ConfigureMemberColumns(gridMembers);
@@ -213,7 +249,7 @@ partial class MainForm
         gridExpiredMemberships.Location = new Point(25, 125); gridExpiredMemberships.Size = new Size(1000, 615); gridExpiredMemberships.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right; gridExpiredMemberships.Visible = false;
         gridRenewalHistory.Location = new Point(25, 125); gridRenewalHistory.Size = new Size(1000, 615); gridRenewalHistory.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right; gridRenewalHistory.Visible = false;
         gridPaymentHistory.Location = new Point(25, 125); gridPaymentHistory.Size = new Size(1000, 615); gridPaymentHistory.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right; gridPaymentHistory.Visible = false;
-        pageMembers.Controls.AddRange(new Control[] { lblMemberSearch, txtMemberSearch, cmbMembersView, btnAddMember, btnEditMember, btnDeleteMember, btnExportMembers, gridMembers, gridActiveMemberships, gridExpiredMemberships, gridRenewalHistory, gridPaymentHistory });
+        pageMembers.Controls.AddRange(new Control[] { lblMemberSearch, txtMemberSearch, cmbMembersView, btnAddMember, btnEditMember, btnMemberPass, btnDeleteMember, btnExportMembers, gridMembers, gridActiveMemberships, gridExpiredMemberships, gridRenewalHistory, gridPaymentHistory });
         pagePayments.Dock = DockStyle.Fill; pagePayments.BackColor = contentPanel.BackColor;
         lblPaymentSearch.Text = "Search payment records"; lblPaymentSearch.Location = new Point(0, 8); lblPaymentSearch.Size = new Size(200, 24); lblPaymentSearch.ForeColor = Color.Gray;
         txtPaymentSearch.Location = new Point(0, 34); txtPaymentSearch.Size = new Size(330, 32); txtPaymentSearch.Font = new Font("Segoe UI", 10); txtPaymentSearch.TextChanged += txtPaymentSearch_TextChanged;

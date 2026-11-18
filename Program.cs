@@ -8,25 +8,56 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        ApplicationConfiguration.Initialize();
-        DataStore.Initialize();
-
-        // Test database connection to XAMPP MySQL
-        bool dbConnected = DatabaseConnection.TestConnection();
-        if (!dbConnected)
+        // Global error handlers to prevent unhandled app crashes
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, e) =>
         {
+            Console.Error.WriteLine($"[ThreadException] {e.Exception}");
             MessageBox.Show(
-                "Warning: Could not connect to the database. Please ensure XAMPP MySQL is running.\n\n" +
-                "Connection details:\n" +
-                "Server: 127.0.0.1\n" +
-                "User: root\n" +
-                "Database: gym_registration_db\n\n" +
-                "The application will continue using local data storage.",
-                "Database Connection Warning",
+                $"An error occurred:\n{e.Exception.Message}\n\nThe system recorded this event and will keep running.",
+                "System Error Notice",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
-        }
+        };
 
-        Application.Run(new LoginForm());
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is Exception ex)
+            {
+                Console.Error.WriteLine($"[FatalException] {ex}");
+            }
+        };
+
+        try
+        {
+            ApplicationConfiguration.Initialize();
+            DataStore.Initialize();
+            EmbeddedAttendanceServer.Start();
+
+            Application.ApplicationExit += (_, _) =>
+            {
+                try { CloudflareTunnelService.StopTunnel(); } catch { }
+                try { EmbeddedAttendanceServer.Stop(); } catch { }
+            };
+
+            // Test database connection to XAMPP MySQL
+            bool dbConnected = DatabaseConnection.TestConnection();
+            if (!dbConnected)
+            {
+                MessageBox.Show(
+                    "Note: Could not connect to the MySQL database.\n\n" +
+                    "Make sure XAMPP MySQL is started if you want to sync records to MySQL.\n\n" +
+                    "The system will run normally in Offline Local Storage mode.",
+                    "Database Notice",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+
+            Application.Run(new LoginForm());
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Startup error: {ex.Message}", "Critical Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 }

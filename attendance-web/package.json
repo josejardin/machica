@@ -1,0 +1,14 @@
+{
+  "name": "universalgym-attendance-web",
+  "version": "1.0.0",
+  "description": "Permanent 24/7 Cloud Attendance Web App for UniversalGym with Anti-Fraud Daily QR Validation",
+  "main": "api/index.js",
+  "scripts": {
+    "start": "node api/index.js",
+    "dev": "node api/index.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

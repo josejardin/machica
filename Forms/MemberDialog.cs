@@ -146,7 +146,7 @@ public partial class MemberDialog : Form
         DialogResult = DialogResult.OK; Close();
     }
 
-    private void MemberDialog_Load(object sender, EventArgs e)
+    private void MemberDialog_Load(object? sender, EventArgs e)
     {
 
     }

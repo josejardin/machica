@@ -79,15 +79,27 @@ public static class DataStore
 
     private static void EnsureAdminOwnerAccount()
     {
-        if (Users.Any(u => u.Username.Equals("admin2@universalgym.ph", StringComparison.OrdinalIgnoreCase))) return;
-
-        Users.Add(new AppUser
+        if (!Users.Any(u => u.Username.Equals("admin", StringComparison.OrdinalIgnoreCase)))
         {
-            Username = "admin2@universalgym.ph",
-            PasswordHash = PasswordHasher.Hash("Machica09"),
-            Role = "Owner",
-            IsActive = true
-        });
+            Users.Add(new AppUser
+            {
+                Username = "admin",
+                PasswordHash = PasswordHasher.Hash("admin123"),
+                Role = "Owner",
+                IsActive = true
+            });
+        }
+
+        if (!Users.Any(u => u.Username.Equals("staff", StringComparison.OrdinalIgnoreCase)))
+        {
+            Users.Add(new AppUser
+            {
+                Username = "staff",
+                PasswordHash = PasswordHasher.Hash("staff123"),
+                Role = "Staff",
+                IsActive = true
+            });
+        }
     }
 
     private static bool EnsureDatabaseAvailable()
@@ -120,10 +132,30 @@ public static class DataStore
          RecalculateMemberBalances(); SyncArchiveRecords();
     }
 
-    private static List<T> Read<T>(MySqlConnection connection, string sql, Func<MySqlDataReader,T> map)
+    private static List<T> Read<T>(MySqlConnection connection, string sql, Func<MySqlDataReader, T> map)
     {
-        using var command = new MySqlCommand(sql, connection); using var reader = command.ExecuteReader(); var values = new List<T>();
-        while (reader.Read()) values.Add(map(reader)); return values;
+        var values = new List<T>();
+        try
+        {
+            using var command = new MySqlCommand(sql, connection);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                try
+                {
+                    values.Add(map(reader));
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Row mapping error in query '{sql}': {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Read query failed for '{sql}': {ex.Message}");
+        }
+        return values;
     }
     private static string S(MySqlDataReader r,string n) => r[n] is DBNull ? "" : Convert.ToString(r[n]) ?? "";
     private static decimal D(MySqlDataReader r,string n) => r[n] is DBNull ? 0m : Convert.ToDecimal(r[n]);
@@ -170,20 +202,124 @@ public static class DataStore
         };
     }
 
-    public static void SaveMembers() { if (!EnsureDatabaseAvailable()) { Save(MembersFile,Members); return; } foreach(var m in Members) Execute(@"INSERT INTO members(id,first_name,middle_name,last_name,full_name,phone,email,plan,fee,start_date,expiry_date,status,is_deleted,deleted_at,deleted_by) VALUES(@id,@first,@middle,@last,@full,@phone,@email,@plan,@fee,@start,@expiry,@status,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE first_name=VALUES(first_name),middle_name=VALUES(middle_name),last_name=VALUES(last_name),full_name=VALUES(full_name),phone=VALUES(phone),email=VALUES(email),plan=VALUES(plan),fee=VALUES(fee),start_date=VALUES(start_date),expiry_date=VALUES(expiry_date),status=VALUES(status),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)", P("@id",m.Id),P("@first",m.FirstName),P("@middle",m.MiddleName),P("@last",m.LastName),P("@full",m.FullName),P("@phone",m.Phone),P("@email",m.Email),P("@plan",m.Plan),P("@fee",m.Fee),P("@start",m.StartDate.Date),P("@expiry",m.ExpiryDate.Date),P("@status",m.Status),P("@deleted",m.IsDeleted),P("@deletedAt",m.DeletedAt),P("@deletedBy",m.DeletedBy)); }
-    public static void SavePayments() { if (!EnsureDatabaseAvailable()) { Save(PaymentsFile,Payments); return; } foreach(var p in Payments) Execute(@"INSERT INTO payments(reference,member_id,member_name,amount,amount_paid,change_amount,method,payment_type,collected_by,date,status,is_deleted,deleted_at,deleted_by) VALUES(@ref,NULLIF(@member,''),@name,@amount,@paid,@change,@method,@type,@by,@date,@status,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE member_id=VALUES(member_id),member_name=VALUES(member_name),amount=VALUES(amount),amount_paid=VALUES(amount_paid),change_amount=VALUES(change_amount),method=VALUES(method),payment_type=VALUES(payment_type),collected_by=VALUES(collected_by),date=VALUES(date),status=VALUES(status),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)", P("@ref",p.Reference),P("@member",p.MemberId),P("@name",p.MemberName),P("@amount",p.Amount),P("@paid",p.AmountPaid == 0 ? p.Amount : p.AmountPaid),P("@change",p.Change),P("@method",p.Method),P("@type",p.PaymentType),P("@by",p.CollectedBy),P("@date",p.Date),P("@status",p.Status),P("@deleted",p.IsDeleted),P("@deletedAt",p.DeletedAt),P("@deletedBy",p.DeletedBy)); }
-    public static void SaveUsers() { if (!EnsureDatabaseAvailable()) { Save(UsersFile,Users); return; } foreach(var u in Users) Execute("INSERT INTO users(username,password,role,is_active,is_deleted,deleted_at,deleted_by) VALUES(@username,@password,@role,@active,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE password=VALUES(password),role=VALUES(role),is_active=VALUES(is_active),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)",P("@password",string.IsNullOrWhiteSpace(u.PasswordHash)?u.Password:u.PasswordHash),P("@role",u.Role),P("@active",u.IsActive),P("@deleted",u.IsDeleted),P("@deletedAt",u.DeletedAt),P("@deletedBy",u.DeletedBy),P("@username",u.Username)); }
-    public static void SaveStaff() { if (!EnsureDatabaseAvailable()) { Save(StaffFile,Staff); return; } foreach(var s in Staff) UpsertStaff(s); }
+    public static void SaveMembers()
+    {
+        Save(MembersFile, Members);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var m in Members)
+            {
+                Execute(@"INSERT INTO members(id,first_name,middle_name,last_name,full_name,phone,email,plan,fee,start_date,expiry_date,status,is_deleted,deleted_at,deleted_by) VALUES(@id,@first,@middle,@last,@full,@phone,@email,@plan,@fee,@start,@expiry,@status,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE first_name=VALUES(first_name),middle_name=VALUES(middle_name),last_name=VALUES(last_name),full_name=VALUES(full_name),phone=VALUES(phone),email=VALUES(email),plan=VALUES(plan),fee=VALUES(fee),start_date=VALUES(start_date),expiry_date=VALUES(expiry_date),status=VALUES(status),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)", P("@id",m.Id),P("@first",m.FirstName),P("@middle",m.MiddleName),P("@last",m.LastName),P("@full",m.FullName),P("@phone",m.Phone),P("@email",m.Email),P("@plan",m.Plan),P("@fee",m.Fee),P("@start",m.StartDate.Date),P("@expiry",m.ExpiryDate.Date),P("@status",m.Status),P("@deleted",m.IsDeleted),P("@deletedAt",m.DeletedAt),P("@deletedBy",m.DeletedBy));
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveMembers MySQL error: {ex.Message}"); }
+    }
+
+    public static void SavePayments()
+    {
+        Save(PaymentsFile, Payments);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var p in Payments)
+            {
+                Execute(@"INSERT INTO payments(reference,member_id,member_name,amount,amount_paid,change_amount,method,payment_type,collected_by,date,status,is_deleted,deleted_at,deleted_by) VALUES(@ref,NULLIF(@member,''),@name,@amount,@paid,@change,@method,@type,@by,@date,@status,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE member_id=VALUES(member_id),member_name=VALUES(member_name),amount=VALUES(amount),amount_paid=VALUES(amount_paid),change_amount=VALUES(change_amount),method=VALUES(method),payment_type=VALUES(payment_type),collected_by=VALUES(collected_by),date=VALUES(date),status=VALUES(status),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)", P("@ref",p.Reference),P("@member",p.MemberId),P("@name",p.MemberName),P("@amount",p.Amount),P("@paid",p.AmountPaid == 0 ? p.Amount : p.AmountPaid),P("@change",p.Change),P("@method",p.Method),P("@type",p.PaymentType),P("@by",p.CollectedBy),P("@date",p.Date),P("@status",p.Status),P("@deleted",p.IsDeleted),P("@deletedAt",p.DeletedAt),P("@deletedBy",p.DeletedBy));
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SavePayments MySQL error: {ex.Message}"); }
+    }
+
+    public static void SaveUsers()
+    {
+        Save(UsersFile, Users);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var u in Users)
+            {
+                Execute("INSERT INTO users(username,password,role,is_active,is_deleted,deleted_at,deleted_by) VALUES(@username,@password,@role,@active,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE password=VALUES(password),role=VALUES(role),is_active=VALUES(is_active),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)",P("@password",string.IsNullOrWhiteSpace(u.PasswordHash)?u.Password:u.PasswordHash),P("@role",u.Role),P("@active",u.IsActive),P("@deleted",u.IsDeleted),P("@deletedAt",u.DeletedAt),P("@deletedBy",u.DeletedBy),P("@username",u.Username));
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveUsers MySQL error: {ex.Message}"); }
+    }
+
+    public static void SaveStaff()
+    {
+        Save(StaffFile, Staff);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var s in Staff) UpsertStaff(s);
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveStaff MySQL error: {ex.Message}"); }
+    }
+
     public static void SavePlans()
     {
-        if (!EnsureDatabaseAvailable()) { Save(PlansFile, Plans); return; }
-        foreach (var plan in Plans) DatabaseConnection.SaveGymPlan(plan);
-        Plans = DatabaseConnection.GetGymPlans();
+        Save(PlansFile, Plans);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var plan in Plans) DatabaseConnection.SaveGymPlan(plan);
+            Plans = DatabaseConnection.GetGymPlans();
+            if (Plans.Count == 0) Plans = DefaultPlans();
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SavePlans MySQL error: {ex.Message}"); }
     }
-    public static void UpsertStaff(Staff s) { if (string.IsNullOrWhiteSpace(s.Position)) s.Position = "Staff"; Execute("INSERT INTO users(username,password,role,full_name,email,phone_number,birthday,home_address,joined_date,status,permissions_json,is_active,is_deleted,deleted_at,deleted_by) VALUES(@username,@password,@role,@full,@email,@phone,@birthday,@address,@joined,@status,@permissions,1,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE password=VALUES(password),role=VALUES(role),full_name=VALUES(full_name),email=VALUES(email),phone_number=VALUES(phone_number),birthday=VALUES(birthday),home_address=VALUES(home_address),joined_date=VALUES(joined_date),status=VALUES(status),permissions_json=VALUES(permissions_json),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)",P("@username",s.Username),P("@password",string.IsNullOrWhiteSpace(s.PasswordHash)?s.Password:s.PasswordHash),P("@role",s.Position),P("@full",s.FullName),P("@email",s.Email),P("@phone",s.PhoneNumber),P("@birthday",s.Birthday),P("@address",s.HomeAddress),P("@joined",s.JoinedDate),P("@status",s.Status),P("@permissions",JsonSerializer.Serialize(s.Permissions)),P("@deleted",s.IsDeleted),P("@deletedAt",s.DeletedAt),P("@deletedBy",s.DeletedBy)); }
-    public static void SaveMembershipRenewals() { if (!EnsureDatabaseAvailable()) { Save(MembershipRenewalsFile,MembershipRenewals); return; } foreach(var r in MembershipRenewals) Execute("INSERT INTO membership_renewals(reference,member_id,member_name,previous_plan,new_plan,previous_status,previous_start_date,previous_expiry_date,previous_fee,new_start_date,new_expiry_date,new_fee,amount_paid,outstanding_amount,payment_method,payment_reference,renewal_date,processed_by,status) VALUES(@ref,@id,@name,@pp,@np,@ps,@pstart,@pexp,@pfee,@nstart,@nexp,@nfee,@paid,@out,@method,@payref,@date,@by,@status) ON DUPLICATE KEY UPDATE status=VALUES(status),amount_paid=VALUES(amount_paid),outstanding_amount=VALUES(outstanding_amount)",P("@ref",r.Reference),P("@id",r.MemberId),P("@name",r.MemberName),P("@pp",r.PreviousPlan),P("@np",r.NewPlan),P("@ps",r.PreviousStatus),P("@pstart",r.PreviousStartDate),P("@pexp",r.PreviousExpiryDate),P("@pfee",r.PreviousFee),P("@nstart",r.NewStartDate),P("@nexp",r.NewExpiryDate),P("@nfee",r.NewFee),P("@paid",r.AmountPaid),P("@out",r.OutstandingAmount),P("@method",r.PaymentMethod),P("@payref",r.PaymentReference),P("@date",r.RenewalDate),P("@by",r.ProcessedBy),P("@status",r.Status)); }
-    public static void SaveDailyGymVisits() { if (!EnsureDatabaseAvailable()) { Save(DailyGymVisitsFile,DailyGymVisits); return; } foreach(var v in DailyGymVisits) Execute("INSERT INTO daily_gym_visits(id,first_name,middle_name,last_name,member_id,is_gym_member,visit_date,fee,payment_method,payment_reference,registered_by,is_deleted,deleted_at,deleted_by) VALUES(@id,@first,@middle,@last,NULLIF(@member,''),@gym,@date,@fee,@method,@ref,@by,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE first_name=VALUES(first_name),middle_name=VALUES(middle_name),last_name=VALUES(last_name),member_id=VALUES(member_id),is_gym_member=VALUES(is_gym_member),visit_date=VALUES(visit_date),fee=VALUES(fee),payment_method=VALUES(payment_method),payment_reference=VALUES(payment_reference),registered_by=VALUES(registered_by),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)",P("@id",v.Id),P("@first",v.FirstName),P("@middle",v.MiddleName),P("@last",v.LastName),P("@member",v.MemberId),P("@gym",v.IsGymMember),P("@date",v.VisitDate.Date),P("@fee",v.Fee),P("@method",v.PaymentMethod),P("@ref",v.PaymentReference),P("@by",v.RegisteredBy),P("@deleted",v.IsDeleted),P("@deletedAt",v.DeletedAt),P("@deletedBy",v.DeletedBy)); }
-    public static void SaveAttendanceRecords() { if (!EnsureDatabaseAvailable()) { Save(AttendanceFile,AttendanceRecords); return; } foreach(var a in AttendanceRecords) Execute("INSERT INTO attendance_records(id,member_id,member_name,attendance_date,check_in_time,recorded_by,is_deleted,deleted_at,deleted_by) VALUES(@id,@member,@name,@date,@time,@by,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE member_name=VALUES(member_name),check_in_time=VALUES(check_in_time),recorded_by=VALUES(recorded_by),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)",P("@id",a.Id),P("@member",a.MemberId),P("@name",a.MemberName),P("@date",a.AttendanceDate.Date),P("@time",a.CheckInTime),P("@by",a.RecordedBy),P("@deleted",a.IsDeleted),P("@deletedAt",a.DeletedAt),P("@deletedBy",a.DeletedBy)); }
+
+    public static void UpsertStaff(Staff s)
+    {
+        if (string.IsNullOrWhiteSpace(s.Position)) s.Position = "Staff";
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            Execute("INSERT INTO users(username,password,role,full_name,email,phone_number,birthday,home_address,joined_date,status,permissions_json,is_active,is_deleted,deleted_at,deleted_by) VALUES(@username,@password,@role,@full,@email,@phone,@birthday,@address,@joined,@status,@permissions,1,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE password=VALUES(password),role=VALUES(role),full_name=VALUES(full_name),email=VALUES(email),phone_number=VALUES(phone_number),birthday=VALUES(birthday),home_address=VALUES(home_address),joined_date=VALUES(joined_date),status=VALUES(status),permissions_json=VALUES(permissions_json),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)",P("@username",s.Username),P("@password",string.IsNullOrWhiteSpace(s.PasswordHash)?s.Password:s.PasswordHash),P("@role",s.Position),P("@full",s.FullName),P("@email",s.Email),P("@phone",s.PhoneNumber),P("@birthday",s.Birthday),P("@address",s.HomeAddress),P("@joined",s.JoinedDate),P("@status",s.Status),P("@permissions",JsonSerializer.Serialize(s.Permissions)),P("@deleted",s.IsDeleted),P("@deletedAt",s.DeletedAt),P("@deletedBy",s.DeletedBy));
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"UpsertStaff MySQL error: {ex.Message}"); }
+    }
+
+    public static void SaveMembershipRenewals()
+    {
+        Save(MembershipRenewalsFile, MembershipRenewals);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var r in MembershipRenewals)
+            {
+                Execute("INSERT INTO membership_renewals(reference,member_id,member_name,previous_plan,new_plan,previous_status,previous_start_date,previous_expiry_date,previous_fee,new_start_date,new_expiry_date,new_fee,amount_paid,outstanding_amount,payment_method,payment_reference,renewal_date,processed_by,status) VALUES(@ref,@id,@name,@pp,@np,@ps,@pstart,@pexp,@pfee,@nstart,@nexp,@nfee,@paid,@out,@method,@payref,@date,@by,@status) ON DUPLICATE KEY UPDATE status=VALUES(status),amount_paid=VALUES(amount_paid),outstanding_amount=VALUES(outstanding_amount)",P("@ref",r.Reference),P("@id",r.MemberId),P("@name",r.MemberName),P("@pp",r.PreviousPlan),P("@np",r.NewPlan),P("@ps",r.PreviousStatus),P("@pstart",r.PreviousStartDate),P("@pexp",r.PreviousExpiryDate),P("@pfee",r.PreviousFee),P("@nstart",r.NewStartDate),P("@nexp",r.NewExpiryDate),P("@nfee",r.NewFee),P("@paid",r.AmountPaid),P("@out",r.OutstandingAmount),P("@method",r.PaymentMethod),P("@payref",r.PaymentReference),P("@date",r.RenewalDate),P("@by",r.ProcessedBy),P("@status",r.Status));
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveMembershipRenewals MySQL error: {ex.Message}"); }
+    }
+
+    public static void SaveDailyGymVisits()
+    {
+        Save(DailyGymVisitsFile, DailyGymVisits);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var v in DailyGymVisits)
+            {
+                Execute("INSERT INTO daily_gym_visits(id,first_name,middle_name,last_name,member_id,is_gym_member,visit_date,fee,payment_method,payment_reference,registered_by,is_deleted,deleted_at,deleted_by) VALUES(@id,@first,@middle,@last,NULLIF(@member,''),@gym,@date,@fee,@method,@ref,@by,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE first_name=VALUES(first_name),middle_name=VALUES(middle_name),last_name=VALUES(last_name),member_id=VALUES(member_id),is_gym_member=VALUES(is_gym_member),visit_date=VALUES(visit_date),fee=VALUES(fee),payment_method=VALUES(payment_method),payment_reference=VALUES(payment_reference),registered_by=VALUES(registered_by),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)",P("@id",v.Id),P("@first",v.FirstName),P("@middle",v.MiddleName),P("@last",v.LastName),P("@member",v.MemberId),P("@gym",v.IsGymMember),P("@date",v.VisitDate.Date),P("@fee",v.Fee),P("@method",v.PaymentMethod),P("@ref",v.PaymentReference),P("@by",v.RegisteredBy),P("@deleted",v.IsDeleted),P("@deletedAt",v.DeletedAt),P("@deletedBy",v.DeletedBy));
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveDailyGymVisits MySQL error: {ex.Message}"); }
+    }
+
+    public static void SaveAttendanceRecords()
+    {
+        Save(AttendanceFile, AttendanceRecords);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var a in AttendanceRecords)
+            {
+                Execute("INSERT INTO attendance_records(id,member_id,member_name,attendance_date,check_in_time,recorded_by,is_deleted,deleted_at,deleted_by) VALUES(@id,@member,@name,@date,@time,@by,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE member_name=VALUES(member_name),check_in_time=VALUES(check_in_time),recorded_by=VALUES(recorded_by),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)",P("@id",a.Id),P("@member",a.MemberId),P("@name",a.MemberName),P("@date",a.AttendanceDate.Date),P("@time",a.CheckInTime),P("@by",a.RecordedBy),P("@deleted",a.IsDeleted),P("@deletedAt",a.DeletedAt),P("@deletedBy",a.DeletedBy));
+            }
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveAttendanceRecords MySQL error: {ex.Message}"); }
+    }
     public static void AddOrUpdateAttendanceFromMemberVisit(DailyGymVisit visit, string recordedBy)
     {
         if (!visit.IsGymMember || string.IsNullOrWhiteSpace(visit.MemberId)) return;
@@ -210,13 +346,21 @@ public static class DataStore
     public static void SaveArchiveRecord(string recordType, string recordId, string displayName, DateTime archivedAt, string archivedBy, string details = "")
     {
         if (!EnsureDatabaseAvailable()) return;
-        Execute("INSERT INTO archive_records(record_type,record_id,display_name,archived_at,archived_by,details) VALUES(@type,@id,@name,@date,@by,@details) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),archived_at=VALUES(archived_at),archived_by=VALUES(archived_by),details=VALUES(details)", P("@type", recordType), P("@id", recordId), P("@name", displayName), P("@date", archivedAt), P("@by", archivedBy), P("@details", details));
+        try
+        {
+            Execute("INSERT INTO archive_records(record_type,record_id,display_name,archived_at,archived_by,details) VALUES(@type,@id,@name,@date,@by,@details) ON DUPLICATE KEY UPDATE display_name=VALUES(display_name),archived_at=VALUES(archived_at),archived_by=VALUES(archived_by),details=VALUES(details)", P("@type", recordType), P("@id", recordId), P("@name", displayName), P("@date", archivedAt), P("@by", archivedBy), P("@details", details));
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveArchiveRecord MySQL error: {ex.Message}"); }
     }
 
     public static void RemoveArchiveRecord(string recordType, string recordId)
     {
         if (!EnsureDatabaseAvailable()) return;
-        Execute("DELETE FROM archive_records WHERE record_type=@type AND record_id=@id", P("@type", recordType), P("@id", recordId));
+        try
+        {
+            Execute("DELETE FROM archive_records WHERE record_type=@type AND record_id=@id", P("@type", recordType), P("@id", recordId));
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"RemoveArchiveRecord MySQL error: {ex.Message}"); }
     }
 
     private static void SyncArchiveRecords()
@@ -226,14 +370,29 @@ public static class DataStore
         foreach (var staff in Staff.Where(s => s.IsDeleted)) SaveArchiveRecord("Staff", staff.Username, staff.FullName, staff.DeletedAt ?? DateTime.Now, staff.DeletedBy, staff.Position);
         foreach (var visit in DailyGymVisits.Where(v => v.IsDeleted)) SaveArchiveRecord("DailyGymVisit", visit.Id, visit.FullName, visit.DeletedAt ?? DateTime.Now, visit.DeletedBy, visit.VisitDate.ToString("yyyy-MM-dd"));
     }
-    public static void SaveStaffActivity() { if (!EnsureDatabaseAvailable()) { Save(StaffActivityFile,StaffActivity); return; } foreach(var a in StaffActivity) Execute("INSERT IGNORE INTO staff_activity(id,username,staff_name,account_type,action,details,member_id,occurred_at) VALUES(@id,@user,@name,@type,@action,@details,NULLIF(@member,''),@date)",P("@id",a.Id),P("@user",a.Username),P("@name",a.StaffName),P("@type",a.AccountType),P("@action",a.Action),P("@details",a.Details),P("@member",a.MemberId),P("@date",a.OccurredAt)); }
+    public static void SaveStaffActivity()
+    {
+        Save(StaffActivityFile, StaffActivity);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var a in StaffActivity) Execute("INSERT IGNORE INTO staff_activity(id,username,staff_name,account_type,action,details,member_id,occurred_at) VALUES(@id,@user,@name,@type,@action,@details,NULLIF(@member,''),@date)",P("@id",a.Id),P("@user",a.Username),P("@name",a.StaffName),P("@type",a.AccountType),P("@action",a.Action),P("@details",a.Details),P("@member",a.MemberId),P("@date",a.OccurredAt));
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveStaffActivity MySQL error: {ex.Message}"); }
+    }
     public static void SaveExpenses()
     {
-        if (!EnsureDatabaseAvailable()) { Save(ExpensesFile, Expenses); Save(ExpenseCategoriesFile, ExpenseCategories); return; }
-        foreach (var category in ExpenseCategories.Where(c => !string.IsNullOrWhiteSpace(c)))
-            Execute("INSERT IGNORE INTO expense_categories(name) VALUES(@name)", P("@name", category.Trim()));
-        foreach (var expense in Expenses)
-            Execute("INSERT INTO expenses(id,expense_name,category,amount,expense_date,payment_method,description,recorded_by,status,is_deleted,deleted_at,deleted_by) VALUES(@id,@name,@category,@amount,@date,@method,@description,@by,@status,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE expense_name=VALUES(expense_name),category=VALUES(category),amount=VALUES(amount),expense_date=VALUES(expense_date),payment_method=VALUES(payment_method),description=VALUES(description),recorded_by=VALUES(recorded_by),status=VALUES(status),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)", P("@id",expense.Id), P("@name",expense.Name), P("@category",expense.Category), P("@amount",expense.Amount), P("@date",expense.ExpenseDate.Date), P("@method",expense.PaymentMethod), P("@description",expense.Description), P("@by",expense.RecordedBy), P("@status",expense.Status), P("@deleted",expense.IsDeleted), P("@deletedAt",expense.DeletedAt), P("@deletedBy",expense.DeletedBy));
+        Save(ExpensesFile, Expenses);
+        Save(ExpenseCategoriesFile, ExpenseCategories);
+        if (!EnsureDatabaseAvailable()) return;
+        try
+        {
+            foreach (var category in ExpenseCategories.Where(c => !string.IsNullOrWhiteSpace(c)))
+                Execute("INSERT IGNORE INTO expense_categories(name) VALUES(@name)", P("@name", category.Trim()));
+            foreach (var expense in Expenses)
+                Execute("INSERT INTO expenses(id,expense_name,category,amount,expense_date,payment_method,description,recorded_by,status,is_deleted,deleted_at,deleted_by) VALUES(@id,@name,@category,@amount,@date,@method,@description,@by,@status,@deleted,@deletedAt,@deletedBy) ON DUPLICATE KEY UPDATE expense_name=VALUES(expense_name),category=VALUES(category),amount=VALUES(amount),expense_date=VALUES(expense_date),payment_method=VALUES(payment_method),description=VALUES(description),recorded_by=VALUES(recorded_by),status=VALUES(status),is_deleted=VALUES(is_deleted),deleted_at=VALUES(deleted_at),deleted_by=VALUES(deleted_by)", P("@id",expense.Id), P("@name",expense.Name), P("@category",expense.Category), P("@amount",expense.Amount), P("@date",expense.ExpenseDate.Date), P("@method",expense.PaymentMethod), P("@description",expense.Description), P("@by",expense.RecordedBy), P("@status",expense.Status), P("@deleted",expense.IsDeleted), P("@deletedAt",expense.DeletedAt), P("@deletedBy",expense.DeletedBy));
+        }
+        catch (Exception ex) { Console.Error.WriteLine($"SaveExpenses MySQL error: {ex.Message}"); }
     }
     public static IEnumerable<Expense> ActiveExpenses => Expenses.Where(e => !e.IsDeleted && string.Equals(e.Status, "Active", StringComparison.OrdinalIgnoreCase));
     public static void PermanentlyDeleteMember(string memberId)
@@ -331,5 +490,17 @@ public static class DataStore
     private static void SaveAllFiles() { Save(MembersFile,Members);Save(PaymentsFile,Payments);Save(UsersFile,Users);Save(StaffFile,Staff);Save(MembershipRenewalsFile,MembershipRenewals);Save(DailyGymVisitsFile,DailyGymVisits);Save(AttendanceFile,AttendanceRecords);Save(StaffActivityFile,StaffActivity);Save(PlansFile,Plans);Save(ExpensesFile,Expenses);Save(ExpenseCategoriesFile,ExpenseCategories); }
     private static List<string> DefaultExpenseCategories() => new() { "Electricity Bill", "Water Bill", "Rental Payment", "Cleaning Supplies", "Maintenance and Repairs", "Office Supplies", "Other Expenses" };
     private static T? Load<T>(string path) { try{return File.Exists(path)?JsonSerializer.Deserialize<T>(File.ReadAllText(path)):default;}catch{return default;} }
-    private static void Save<T>(string path,T value)=>File.WriteAllText(path,JsonSerializer.Serialize(value,Options));
+    private static void Save<T>(string path, T value)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(path, JsonSerializer.Serialize(value, Options));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Local save error for {path}: {ex.Message}");
+        }
+    }
 }

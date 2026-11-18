@@ -1,4 +1,5 @@
 using MySql.Data.MySqlClient;
+using GymRegistrationApp.Models;
 
 namespace GymRegistrationApp.Services;
 
@@ -18,103 +19,221 @@ public static class AttendanceService
 
     public static AttendanceResult Record(AttendanceSubmission submission, string recordedBy)
     {
+        var memberId = submission.MemberId.Trim().ToUpperInvariant();
         var first = submission.FirstName.Trim();
         var middle = submission.MiddleName.Trim();
         var last = submission.LastName.Trim();
-        var memberId = submission.MemberId.Trim().ToUpperInvariant();
 
-        if (first.Length == 0 || last.Length == 0 || memberId.Length == 0)
-            return new(false, "First name, last name, and member ID are required.");
-        if (!System.Text.RegularExpressions.Regex.IsMatch(memberId, "^GM[0-9]{6}$"))
-            return new(false, "Member ID must use the GM###### format.");
-        if (!DatabaseConnection.TestConnection())
-            return new(false, "The attendance service is temporarily unavailable.");
-
-        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, ManilaTimeZone);
-        var date = now.Date;
-        using var connection = DatabaseConnection.GetConnection();
-        connection.Open();
-        using var transaction = connection.BeginTransaction();
-
-        try
+        if (memberId.Length == 0 && (first.Length == 0 || last.Length == 0))
         {
-            using var memberCommand = new MySqlCommand(@"
+            return new(false, "Please provide your Member ID or Full Name.");
+        }
+
+        var now = ManilaNow();
+        var date = now.Date;
+
+        // Try MySQL first if connected
+        if (DatabaseConnection.TestConnection())
+        {
+            try
+            {
+                using var connection = DatabaseConnection.GetConnection();
+                connection.Open();
+                using var transaction = connection.BeginTransaction();
+
+                try
+                {
+                    string dbId, dbFirst, dbMiddle, dbLast, fullName, status;
+                    DateTime expiry;
+
+                    if (memberId.Length > 0)
+                    {
+                        using var cmd = new MySqlCommand(@"
 SELECT id, first_name, middle_name, last_name, full_name, expiry_date, status
 FROM members
 WHERE id=@id AND is_deleted=0
 FOR UPDATE", connection, transaction);
-            memberCommand.Parameters.AddWithValue("@id", memberId);
-            using var reader = memberCommand.ExecuteReader();
-            if (!reader.Read()) return new(false, "Member ID or name could not be verified.");
+                        cmd.Parameters.AddWithValue("@id", memberId);
+                        using var reader = cmd.ExecuteReader();
+                        if (!reader.Read()) return new(false, $"Member ID '{memberId}' was not found.");
 
-            var dbFirst = Convert.ToString(reader["first_name"]) ?? "";
-            var dbMiddle = Convert.ToString(reader["middle_name"]) ?? "";
-            var dbLast = Convert.ToString(reader["last_name"]) ?? "";
-            var fullName = Convert.ToString(reader["full_name"]) ?? $"{dbFirst} {dbLast}";
-            var expiry = Convert.ToDateTime(reader["expiry_date"]).Date;
-            var status = Convert.ToString(reader["status"]) ?? "";
-            var matches = string.Equals(first, dbFirst, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(middle, dbMiddle, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(last, dbLast, StringComparison.OrdinalIgnoreCase);
-            if (!matches) return new(false, "Member information does not match the registered member.");
-            if (!string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase) || expiry < date)
-                return new(false, "The membership is inactive or expired.");
-            reader.Close();
+                        dbId = Convert.ToString(reader["id"]) ?? memberId;
+                        dbFirst = Convert.ToString(reader["first_name"]) ?? "";
+                        dbMiddle = Convert.ToString(reader["middle_name"]) ?? "";
+                        dbLast = Convert.ToString(reader["last_name"]) ?? "";
+                        fullName = Convert.ToString(reader["full_name"]) ?? $"{dbFirst} {dbLast}".Trim();
+                        expiry = Convert.ToDateTime(reader["expiry_date"]).Date;
+                        status = Convert.ToString(reader["status"]) ?? "";
+                        reader.Close();
 
-            using var duplicateCommand = new MySqlCommand(@"
+                        // If user also provided names, verify they loosely match
+                        if (first.Length > 0 && !string.Equals(first, dbFirst, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return new(false, "The first name does not match the registered Member ID.");
+                        }
+                    }
+                    else
+                    {
+                        using var cmd = new MySqlCommand(@"
+SELECT id, first_name, middle_name, last_name, full_name, expiry_date, status
+FROM members
+WHERE first_name=@first AND last_name=@last AND is_deleted=0
+ORDER BY id DESC LIMIT 1", connection, transaction);
+                        cmd.Parameters.AddWithValue("@first", first);
+                        cmd.Parameters.AddWithValue("@last", last);
+                        using var reader = cmd.ExecuteReader();
+                        if (!reader.Read()) return new(false, $"Member '{first} {last}' was not found.");
+
+                        dbId = Convert.ToString(reader["id"]) ?? "";
+                        dbFirst = Convert.ToString(reader["first_name"]) ?? first;
+                        dbMiddle = Convert.ToString(reader["middle_name"]) ?? "";
+                        dbLast = Convert.ToString(reader["last_name"]) ?? last;
+                        fullName = Convert.ToString(reader["full_name"]) ?? $"{dbFirst} {dbLast}".Trim();
+                        expiry = Convert.ToDateTime(reader["expiry_date"]).Date;
+                        status = Convert.ToString(reader["status"]) ?? "";
+                        reader.Close();
+                    }
+
+                    if (expiry < date || string.Equals(status, "Expired", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return new(false, $"Membership expired on {expiry:MMM dd, yyyy}. Please renew at front desk.", dbId, fullName);
+                    }
+
+                    // Check duplicate attendance today
+                    using var dupCmd = new MySqlCommand(@"
 SELECT COUNT(*) FROM attendance_records
 WHERE member_id=@id AND attendance_date=@date AND is_deleted=0", connection, transaction);
-            duplicateCommand.Parameters.AddWithValue("@id", memberId);
-            duplicateCommand.Parameters.AddWithValue("@date", date);
-            if (Convert.ToInt32(duplicateCommand.ExecuteScalar()) > 0)
-                return new(false, "Attendance has already been recorded today.", memberId, fullName, date, now);
+                    dupCmd.Parameters.AddWithValue("@id", dbId);
+                    dupCmd.Parameters.AddWithValue("@date", date);
+                    if (Convert.ToInt32(dupCmd.ExecuteScalar()) > 0)
+                    {
+                        return new(false, $"Already checked in today ({now:h:mm tt}).", dbId, fullName, date, now);
+                    }
 
-            var attendanceId = $"ATT-{Guid.NewGuid():N}";
-            using var attendanceCommand = new MySqlCommand(@"
+                    var attendanceId = DataStore.NewAttendanceId();
+                    using var attCmd = new MySqlCommand(@"
 INSERT INTO attendance_records
 (id, member_id, member_name, attendance_date, check_in_time, recorded_by)
-VALUES (@attendanceId, @memberId, @memberName, @date, @time, @recordedBy)", connection, transaction);
-            attendanceCommand.Parameters.AddWithValue("@attendanceId", attendanceId);
-            attendanceCommand.Parameters.AddWithValue("@memberId", memberId);
-            attendanceCommand.Parameters.AddWithValue("@memberName", fullName);
-            attendanceCommand.Parameters.AddWithValue("@date", date);
-            attendanceCommand.Parameters.AddWithValue("@time", now);
-            attendanceCommand.Parameters.AddWithValue("@recordedBy", recordedBy);
-            attendanceCommand.ExecuteNonQuery();
+VALUES (@id, @memberId, @name, @date, @time, @by)", connection, transaction);
+                    attCmd.Parameters.AddWithValue("@id", attendanceId);
+                    attCmd.Parameters.AddWithValue("@memberId", dbId);
+                    attCmd.Parameters.AddWithValue("@name", fullName);
+                    attCmd.Parameters.AddWithValue("@date", date);
+                    attCmd.Parameters.AddWithValue("@time", now);
+                    attCmd.Parameters.AddWithValue("@by", recordedBy);
+                    attCmd.ExecuteNonQuery();
 
-            using var visitCommand = new MySqlCommand(@"
+                    using var visitCmd = new MySqlCommand(@"
 INSERT INTO daily_gym_visits
 (id, first_name, middle_name, last_name, member_id, is_gym_member, visit_date, fee, payment_method, payment_reference, registered_by)
-VALUES (@visitId, @first, @middle, @last, @memberId, 1, @date, 0.00, 'Included', '', @recordedBy)", connection, transaction);
-            visitCommand.Parameters.AddWithValue("@visitId", $"DG-{Guid.NewGuid():N}");
-            visitCommand.Parameters.AddWithValue("@first", dbFirst);
-            visitCommand.Parameters.AddWithValue("@middle", dbMiddle);
-            visitCommand.Parameters.AddWithValue("@last", dbLast);
-            visitCommand.Parameters.AddWithValue("@memberId", memberId);
-            visitCommand.Parameters.AddWithValue("@date", date);
-            visitCommand.Parameters.AddWithValue("@recordedBy", recordedBy);
-            visitCommand.ExecuteNonQuery();
+VALUES (@id, @first, @middle, @last, @memberId, 1, @date, 0.00, 'Included', '', @by)", connection, transaction);
+                    visitCmd.Parameters.AddWithValue("@id", DataStore.NewDailyGymVisitId());
+                    visitCmd.Parameters.AddWithValue("@first", dbFirst);
+                    visitCmd.Parameters.AddWithValue("@middle", dbMiddle);
+                    visitCmd.Parameters.AddWithValue("@last", dbLast);
+                    visitCmd.Parameters.AddWithValue("@memberId", dbId);
+                    visitCmd.Parameters.AddWithValue("@date", date);
+                    visitCmd.Parameters.AddWithValue("@by", recordedBy);
+                    visitCmd.ExecuteNonQuery();
 
-            transaction.Commit();
-            return new(true, "Attendance recorded successfully.", memberId, fullName, date, now);
+                    transaction.Commit();
+
+                    // Keep in-memory store in sync
+                    DataStore.AddOrUpdateAttendanceFromMemberVisit(new DailyGymVisit
+                    {
+                        Id = attendanceId,
+                        MemberId = dbId,
+                        FirstName = dbFirst,
+                        MiddleName = dbMiddle,
+                        LastName = dbLast,
+                        IsGymMember = true,
+                        VisitDate = date
+                    }, recordedBy);
+
+                    return new(true, $"Welcome to UniversalGym, {fullName}!", dbId, fullName, date, now);
+                }
+                catch (MySqlException ex) when (ex.Number == 1062)
+                {
+                    transaction.Rollback();
+                    return new(false, "Already checked in today.", memberId);
+                }
+                catch
+                {
+                    transaction.Rollback();
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"MySQL attendance error, falling back to local: {ex.Message}");
+            }
         }
-        catch (MySqlException ex) when (ex.Number == 1062)
+
+        // Offline Fallback using in-memory DataStore
+        var offlineMember = !string.IsNullOrEmpty(memberId)
+            ? DataStore.Members.FirstOrDefault(m => !m.IsDeleted && m.Id.Equals(memberId, StringComparison.OrdinalIgnoreCase))
+            : DataStore.Members.FirstOrDefault(m => !m.IsDeleted &&
+                m.FirstName.Equals(first, StringComparison.OrdinalIgnoreCase) &&
+                m.LastName.Equals(last, StringComparison.OrdinalIgnoreCase));
+
+        if (offlineMember is null)
         {
-            transaction.Rollback();
-            return new(false, "Attendance has already been recorded today.", memberId);
+            return new(false, "Member record not found in system.", memberId);
         }
-        catch
+
+        if (offlineMember.ExpiryDate.Date < date || string.Equals(offlineMember.Status, "Expired", StringComparison.OrdinalIgnoreCase))
         {
-            transaction.Rollback();
-            throw;
+            return new(false, $"Membership expired on {offlineMember.ExpiryDate:MMM dd, yyyy}.", offlineMember.Id, offlineMember.FullName);
         }
+
+        var existingToday = DataStore.AttendanceRecords.Any(a =>
+            !a.IsDeleted &&
+            a.MemberId == offlineMember.Id &&
+            a.AttendanceDate.Date == date);
+
+        if (existingToday)
+        {
+            return new(false, "Already checked in today.", offlineMember.Id, offlineMember.FullName, date, now);
+        }
+
+        var newAtt = new AttendanceRecord
+        {
+            Id = DataStore.NewAttendanceId(),
+            MemberId = offlineMember.Id,
+            MemberName = offlineMember.FullName,
+            AttendanceDate = date,
+            CheckInTime = now,
+            RecordedBy = recordedBy
+        };
+
+        DataStore.AttendanceRecords.Add(newAtt);
+        DataStore.SaveAttendanceRecords();
+
+        var newVisit = new DailyGymVisit
+        {
+            Id = DataStore.NewDailyGymVisitId(),
+            MemberId = offlineMember.Id,
+            FirstName = offlineMember.FirstName,
+            MiddleName = offlineMember.MiddleName,
+            LastName = offlineMember.LastName,
+            IsGymMember = true,
+            VisitDate = date,
+            Fee = 0,
+            PaymentMethod = "Included",
+            RegisteredBy = recordedBy
+        };
+        DataStore.DailyGymVisits.Add(newVisit);
+        DataStore.SaveDailyGymVisits();
+
+        return new(true, $"Welcome, {offlineMember.FullName}! (Saved offline)", offlineMember.Id, offlineMember.FullName, date, now);
     }
 
     public static DateTime ManilaNow() => TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, ManilaTimeZone);
 
     private static TimeZoneInfo ResolveManilaTimeZone()
     {
-        try { return TimeZoneInfo.FindSystemTimeZoneById("Asia/Manila"); }
-        catch (TimeZoneNotFoundException) { return TimeZoneInfo.FindSystemTimeZoneById("Singapore Standard Time"); }
+        try { return TimeZoneInfo.FindSystemTimeZoneById("Singapore Standard Time"); } catch { }
+        try { return TimeZoneInfo.FindSystemTimeZoneById("Asia/Manila"); } catch { }
+        return TimeZoneInfo.Local;
     }
 }

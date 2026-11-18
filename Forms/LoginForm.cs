@@ -69,7 +69,7 @@ public partial class LoginForm : Form
     }
     private void chkShowPassword_CheckedChanged(object? sender, EventArgs e) => txtPassword.UseSystemPasswordChar = !chkShowPassword.Checked;
 
-    private void lblBrand_Click(object sender, EventArgs e)
+    private void lblBrand_Click(object? sender, EventArgs e)
     {
 
     }

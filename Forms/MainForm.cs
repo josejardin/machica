@@ -63,10 +63,12 @@ public partial class MainForm : Form
 
         ShowPage("Dashboard"); 
         RefreshData(); 
+        _ = TriggerCloudSyncSilentAsync();
         _databaseRefreshTimer.Tick += (_, _) =>
         {
             DataStore.Reload();
             RefreshData();
+            _ = TriggerCloudSyncSilentAsync();
         };
         _databaseRefreshTimer.Start();
     }
@@ -99,6 +101,103 @@ public partial class MainForm : Form
         {
             Console.WriteLine($"Database initialization error: {ex.Message}");
         }
+        UpdateDatabaseStatus();
+    }
+
+    private void UpdateDatabaseStatus()
+    {
+        if (lblDbStatus == null) return;
+        try
+        {
+            bool isConnected = DatabaseConnection.TestConnection();
+            if (isConnected)
+            {
+                lblDbStatus.Text = "🟢 MySQL Online";
+                lblDbStatus.ForeColor = Color.FromArgb(39, 174, 96);
+                lblDbStatus.BackColor = Color.FromArgb(235, 247, 238);
+            }
+            else
+            {
+                lblDbStatus.Text = "🟠 Offline Local Storage";
+                lblDbStatus.ForeColor = Color.FromArgb(211, 84, 0);
+                lblDbStatus.BackColor = Color.FromArgb(254, 243, 235);
+            }
+        }
+        catch
+        {
+            lblDbStatus.Text = "🟠 Offline Local Storage";
+            lblDbStatus.ForeColor = Color.FromArgb(211, 84, 0);
+            lblDbStatus.BackColor = Color.FromArgb(254, 243, 235);
+        }
+    }
+
+    private async Task TriggerCloudSyncAsync()
+    {
+        btnSyncCloud.Enabled = false;
+        btnSyncCloud.Text = "⏳ Syncing...";
+        try
+        {
+            var settingsUrl = QRCodeManagementForm.LoadSavedAttendanceUrl();
+            if (string.IsNullOrWhiteSpace(settingsUrl) || !settingsUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                MessageBox.Show(
+                    "Please configure your Cloud Attendance URL in the QR Code Management screen first.\n\n" +
+                    "Example: https://universalgym-attendance.vercel.app/attendance",
+                    "Configure Cloud URL",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+
+            var result = await CloudAttendanceSyncService.SyncFromCloudAsync(settingsUrl);
+            if (result.Success)
+            {
+                if (result.SyncedCount > 0)
+                {
+                    RefreshData();
+                    try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+                    MessageBox.Show(result.Message, "Cloud Sync Completed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    MessageBox.Show("All attendance records are already up to date with the Cloud.", "Cloud Sync", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            else
+            {
+                MessageBox.Show($"Could not sync with Cloud:\n{result.Message}", "Cloud Sync Notice", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Sync error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            btnSyncCloud.Enabled = true;
+            btnSyncCloud.Text = "☁️ Sync Cloud";
+        }
+    }
+
+    private async Task TriggerCloudSyncSilentAsync()
+    {
+        try
+        {
+            var settingsUrl = QRCodeManagementForm.LoadSavedAttendanceUrl();
+            if (string.IsNullOrWhiteSpace(settingsUrl) || !settingsUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var result = await CloudAttendanceSyncService.SyncFromCloudAsync(settingsUrl);
+            if (result.Success && result.SyncedCount > 0)
+            {
+                Invoke(() =>
+                {
+                    RefreshData();
+                    try { System.Media.SystemSounds.Asterisk.Play(); } catch { }
+                });
+            }
+        }
+        catch { }
     }
     private void ShowPage(string page)
     {
@@ -241,6 +340,7 @@ public partial class MainForm : Form
             _dashboardHost.Invalidate(true);
         }
         LoadMembersGrid(); LoadPaymentsGrid(); LoadActiveMembershipsGrid(); LoadExpiredMembershipsGrid(); LoadRenewalHistoryGrid(); LoadPaymentHistoryGrid(); LoadIncomeReportsData(); LoadStaffUsersData(); LoadDeletedRecordsData();
+        UpdateDatabaseStatus();
     }
 
     private void BuildOverviewDashboard()
@@ -1006,7 +1106,7 @@ public partial class MainForm : Form
     private void OpenQRCodeManagement()
     {
         if (!HasPermission(p => p.CanManageDailyGym)) return;
-        using var form = new QRCodeManagementForm();
+        using var form = new QRCodeManagementForm(_username);
         form.ShowDialog(this);
     }
     private void OpenReports()
@@ -1123,6 +1223,18 @@ public partial class MainForm : Form
         if (member is null) { MessageBox.Show("Select a member to edit."); return; }
         using var dlg = new MemberDialog(member);
         if (dlg.ShowDialog(this) == DialogResult.OK && dlg.ResultMember is not null) { var updated = dlg.ResultMember; var idx = DataStore.Members.FindIndex(m => m.Id == id); DataStore.Members[idx] = updated; DataStore.RecalculateMemberBalances(); DataStore.SaveMembers(); RecordActivity("Member updated", $"Updated member details for {updated.FullName}.", updated.Id); RefreshData(); }
+    }
+    private void btnMemberPass_Click(object? s, EventArgs e)
+    {
+        var id = SelectedMemberId();
+        var member = DataStore.Members.FirstOrDefault(m => m.Id == id);
+        if (member is null)
+        {
+            MessageBox.Show("Please select a member to view or print their Member Pass.", "No member selected", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        using var dlg = new MemberCardDialog(member);
+        dlg.ShowDialog(this);
     }
     private void btnDeleteMember_Click(object? s, EventArgs e)
     {
@@ -1391,7 +1503,7 @@ public partial class MainForm : Form
         {
             if (e.RowIndex >= 0 && e.ColumnIndex >= 0 && gridIncomeReportTransactions.Columns[e.ColumnIndex].Name == "Amount")
             {
-                e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
+                if (e.CellStyle != null) e.CellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
             }
         };
         gridIncomeReportTransactions.CellToolTipTextNeeded += (_, e) =>

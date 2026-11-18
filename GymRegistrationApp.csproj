@@ -18,8 +18,8 @@
 
   <ItemGroup>
     <None Include=".github\copilot-instructions.md" />
-    <None Include="AttendanceApi\AttendanceApi.csproj" />
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="cloudflared.exe" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,0 +1,10 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+cloudflared.exe
+.vercel/
+attendance-web/.vercel/
+attendance-web/node_modules/
+*.tmp
